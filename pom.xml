@@ -23,19 +23,19 @@
     -->
     <!-- ##################################################################################################### -->
 
-    <groupId>org.fourthline.cling</groupId>
+    <groupId>com.github.1001tvs.cling</groupId>
     <artifactId>cling</artifactId>
     <packaging>pom</packaging>
     <version>2.1.2</version>
 
     <modules>
         <module>core</module>
-        <module>demo</module>
-        <module>workbench</module>
-        <module>website</module>
-        <module>distribution</module>
+        <!--module>demo</module-->
+        <!--module>workbench</module-->
+        <!--module>website</module-->
+        <!--module>distribution</module-->
         <module>support</module>
-        <module>mediarenderer</module>
+        <!--module>mediarenderer</module-->
     </modules>
 
     <!-- ##################################################################################################### -->
@@ -70,22 +70,29 @@
         </developer>
     </developers>
 
-    <distributionManagement>
+    <pluginRepositories>
+        <pluginRepository>
+            <id>jitpack.io</id>
+            <url>https://jitpack.io</url>
+        </pluginRepository>
+    </pluginRepositories>
+
+    <repositories>
         <repository>
-            <id>4thline.org</id>
-            <url>scpexe://4thline/data/website/docroot/m2/</url>
+            <id>jitpack.io</id>
+            <url>https://jitpack.io</url>
         </repository>
-    </distributionManagement>
+    </repositories>
 
     <!-- ##################################################################################################### -->
 
     <properties>
+        <maven.javadoc.skip>true</maven.javadoc.skip>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <maven.compiler.source>1.7</maven.compiler.source>
         <maven.compiler.target>1.7</maven.compiler.target>
 
-        <seamless.version>1.1.2</seamless.version>
-        <lemma.version>1.1.1</lemma.version>
+        <seamless.version>1.1.1</seamless.version>
         <testng.version>6.14.3</testng.version>
         <android.version>4.1.1.4</android.version>
         <android.maven.plugin.version>4.1.1</android.maven.plugin.version>
@@ -100,39 +107,7 @@
         <weld.version>1.1.34.Final</weld.version>
         <javassist.version>3.22.0-GA</javassist.version>
         <kxml.version>2.3.0</kxml.version>
-
     </properties>
-
-    <!-- ##################################################################################################### -->
-
-    <repositories>
-        <repository>
-            <id>4thline-repo</id>
-            <url>http://4thline.org/m2</url>
-            <snapshots>
-                <enabled>false</enabled>
-            </snapshots>
-        </repository>
-    </repositories>
-
-    <pluginRepositories>
-        <pluginRepository>
-            <id>4thline-repo</id>
-            <url>http://4thline.org/m2</url>
-            <snapshots>
-                <enabled>false</enabled>
-            </snapshots>
-        </pluginRepository>
-        <pluginRepository>
-            <id>onejar-maven-plugin.googlecode.com</id>
-            <url>http://onejar-maven-plugin.googlecode.com/svn/mavenrepo</url>
-            <snapshots>
-                <enabled>false</enabled>
-            </snapshots>
-        </pluginRepository>
-    </pluginRepositories>
-
-    <!-- ##################################################################################################### -->
 
     <build>
 
@@ -161,6 +136,7 @@
                     <configuration>
                         <quiet>true</quiet>
                         <additionalparam>-Xdoclint:none</additionalparam>
+			<additionalparam>--allow-script-in-comments</additionalparam>
                     </configuration>
                 </plugin>
 
@@ -213,19 +189,6 @@
                     <groupId>com.jolira</groupId>
                     <artifactId>onejar-maven-plugin</artifactId>
                     <version>1.4.4</version>
-                </plugin>
-
-                <!-- Manual generation settings -->
-                <plugin>
-                    <groupId>org.fourthline.lemma</groupId>
-                    <artifactId>lemma-maven-plugin</artifactId>
-                    <version>${lemma.version}</version>
-                    <configuration>
-                        <!-- Generate unique identifiers for all citations
-                        TODO: Docs cleanup necessary for this
-                        <processXRefs>false</processXRefs>
-                        -->
-                    </configuration>
                 </plugin>
 
                 <!-- Fixing the versions so Maven stops looking for the latest online... -->
