@@ -74,9 +74,15 @@ public abstract class ReceivingAsync<M extends UpnpMessage> implements Runnable 
                 if (cause instanceof InterruptedException) {
                     log.log(Level.INFO, "Interrupted protocol '" + getClass().getSimpleName() + "': " + ex, cause);
                 } else {
-                    throw new RuntimeException(
+                    // source code
+                    // throw new RuntimeException(
+                    //     "Fatal error while executing protocol '" + getClass().getSimpleName() + "': " + ex, ex
+                    // );
+                    RuntimeException e =  RuntimeException(
                         "Fatal error while executing protocol '" + getClass().getSimpleName() + "': " + ex, ex
                     );
+                    e.printStackTrace();
+                    log.log(Level.INFO, "Fatal error while executing protocol '" + getClass().getSimpleName() + "': " + ex, ex);
                 }
             }
         }
