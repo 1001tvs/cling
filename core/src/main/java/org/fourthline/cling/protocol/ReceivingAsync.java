@@ -78,11 +78,10 @@ public abstract class ReceivingAsync<M extends UpnpMessage> implements Runnable 
                     // throw new RuntimeException(
                     //     "Fatal error while executing protocol '" + getClass().getSimpleName() + "': " + ex, ex
                     // );
-                    RuntimeException e =  RuntimeException(
+                    RuntimeException e =  new RuntimeException(
                         "Fatal error while executing protocol '" + getClass().getSimpleName() + "': " + ex, ex
                     );
                     e.printStackTrace();
-                    log.log(Level.INFO, "Fatal error while executing protocol '" + getClass().getSimpleName() + "': " + ex, ex);
                 }
             }
         }
