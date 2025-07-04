@@ -249,12 +249,12 @@ public class NetworkAddressFactoryImpl implements NetworkAddressFactory {
 
     protected List<InetAddress> getInetAddresses(NetworkInterface networkInterface) {
         if(InteAddressMap.containsKey(networkInterface)){
-            log.info("cling_debug getInetAddresses networkInterface exit return "+InteAddressMap.get(networkInterface));
+            // log.info("cling_debug getInetAddresses networkInterface exit return "+InteAddressMap.get(networkInterface));
             return InteAddressMap.get(networkInterface);
         }
         List<InetAddress> list = Collections.list(networkInterface.getInetAddresses());
         InteAddressMap.put(networkInterface, list);
-        log.info("cling_debug getInetAddresses networkInterface not exit return & add "+list);
+        // log.info("cling_debug getInetAddresses networkInterface not exit return & add "+list);
         return list;
     }
 
