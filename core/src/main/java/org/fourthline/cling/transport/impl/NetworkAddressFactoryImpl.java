@@ -177,7 +177,7 @@ public class NetworkAddressFactoryImpl implements NetworkAddressFactory {
             //return iface != null ? iface.getHardwareAddress() : null;
             return null;
         } catch (Throwable ex) {
-            log.log(Level.WARNING, "cling_debug Cannot get hardware address for: " + inetAddress, ex);
+            log.log(Level.WARNING, "Cannot get hardware address for: " + inetAddress, ex);
         	// On Win32: java.lang.Error: IP Helper Library GetIpAddrTable function failed
 
             // On Android 4.0.3 NullPointerException with inetAddress != null
