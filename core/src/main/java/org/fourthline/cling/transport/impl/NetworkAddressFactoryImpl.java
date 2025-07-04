@@ -63,6 +63,7 @@ public class NetworkAddressFactoryImpl implements NetworkAddressFactory {
     final protected List<InetAddress> bindAddresses = new ArrayList<>();
 
     protected int streamListenPort;
+    private static volatile byte[] hardwareAddress;
 
     /**
      * Defaults to an ephemeral port.
@@ -167,12 +168,16 @@ public class NetworkAddressFactoryImpl implements NetworkAddressFactory {
         return networkInterfaces.size() > 0 && bindAddresses.size() > 0;
     }
 
+
+    //https://developer.android.com/identity/user-data-ids?hl=zh-cn#mac-addresses
+    //Android 11 and above cannot read the Mac address, and it does not affect device discovery (in actual use), so null is returned directly.
     public byte[] getHardwareAddress(InetAddress inetAddress) {
         try {
-            NetworkInterface iface = NetworkInterface.getByInetAddress(inetAddress);
-            return iface != null ? iface.getHardwareAddress() : null;
+            // NetworkInterface iface = NetworkInterface.getByInetAddress(inetAddress);
+            //return iface != null ? iface.getHardwareAddress() : null;
+            return null;
         } catch (Throwable ex) {
-            log.log(Level.WARNING, "Cannot get hardware address for: " + inetAddress, ex);
+            log.log(Level.WARNING, "cling_debug Cannot get hardware address for: " + inetAddress, ex);
         	// On Win32: java.lang.Error: IP Helper Library GetIpAddrTable function failed
 
             // On Android 4.0.3 NullPointerException with inetAddress != null

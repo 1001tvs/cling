@@ -29,6 +29,7 @@ import java.net.InetSocketAddress;
 import java.net.MulticastSocket;
 import java.net.NetworkInterface;
 import java.net.SocketException;
+import java.util.logging.Level;
 import java.util.logging.Logger;
 
 /**
@@ -120,12 +121,13 @@ public class MulticastReceiverImpl implements MulticastReceiver<MulticastReceive
                             datagram.getAddress()
                         );
 
-                log.fine(
-                        "UDP datagram received from: " + datagram.getAddress().getHostAddress() 
-                                + ":" + datagram.getPort()
-                                + " on local interface: " + multicastInterface.getDisplayName()
-                                + " and address: " + receivedOnLocalAddress.getHostAddress()
-                );
+                log.info("cling_debug try to read  HostAddress !!!!");
+                // log.fine(
+                //         "UDP datagram received from: " + datagram.getAddress().getHostAddress() 
+                //                 + ":" + datagram.getPort()
+                //                 + " on local interface: " + multicastInterface.getDisplayName()
+                //                 + " and address: " + receivedOnLocalAddress.getHostAddress()
+                // );
 
                 router.received(datagramProcessor.read(receivedOnLocalAddress, datagram));
 
