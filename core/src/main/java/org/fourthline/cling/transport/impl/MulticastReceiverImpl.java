@@ -121,7 +121,6 @@ public class MulticastReceiverImpl implements MulticastReceiver<MulticastReceive
                             datagram.getAddress()
                         );
 
-                log.info("cling_debug try to read  HostAddress !!!!");
                 // log.fine(
                 //         "UDP datagram received from: " + datagram.getAddress().getHostAddress() 
                 //                 + ":" + datagram.getPort()

@@ -18,6 +18,7 @@ package org.fourthline.cling.model;
 import java.net.InetAddress;
 import java.net.URI;
 import java.net.URL;
+import java.util.HashMap;
 
 /**
  * The IP address/port, MAC address, and URI path of a (network) location.
@@ -78,10 +79,14 @@ public class Location {
         return url;
     }
 
+    private static volatile HashMap<InetAddress, String> addressHashMap = new HashMap<>();
     // Performance optimization on Android
     private static URL createAbsoluteURL(InetAddress address, int localStreamPort, String path) {
         try {
-            return new URL("http", address.getHostAddress(), localStreamPort, path);
+            if(!addressHashMap.containsKey(address)){
+                addressHashMap.put(address, address.getHostAddress());
+            }
+            return new URL("http", addressHashMap.get(address), localStreamPort, path);
         } catch (Exception ex) {
             throw new IllegalArgumentException("Address, port, and URI can not be converted to URL", ex);
         }

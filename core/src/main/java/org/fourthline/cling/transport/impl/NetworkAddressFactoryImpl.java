@@ -32,6 +32,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.Enumeration;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Iterator;
 import java.util.List;
@@ -63,7 +64,6 @@ public class NetworkAddressFactoryImpl implements NetworkAddressFactory {
     final protected List<InetAddress> bindAddresses = new ArrayList<>();
 
     protected int streamListenPort;
-    private static volatile byte[] hardwareAddress;
 
     /**
      * Defaults to an ephemeral port.
@@ -245,8 +245,17 @@ public class NetworkAddressFactoryImpl implements NetworkAddressFactory {
         return networkInterface.getInterfaceAddresses();
     }
 
+    private HashMap<NetworkInterface,List<InetAddress>> InteAddressMap = new HashMap<>();
+
     protected List<InetAddress> getInetAddresses(NetworkInterface networkInterface) {
-        return Collections.list(networkInterface.getInetAddresses());
+        if(InteAddressMap.containsKey(networkInterface)){
+            log.info("cling_debug getInetAddresses networkInterface exit return "+InteAddressMap.get(networkInterface));
+            return InteAddressMap.get(networkInterface);
+        }
+        List<InetAddress> list = Collections.list(networkInterface.getInetAddresses());
+        InteAddressMap.put(networkInterface, list);
+        log.info("cling_debug getInetAddresses networkInterface not exit return & add "+list);
+        return list;
     }
 
     protected InetAddress getBindAddressInSubnetOf(InetAddress inetAddress) {
