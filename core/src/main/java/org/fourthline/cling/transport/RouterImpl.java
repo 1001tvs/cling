@@ -302,8 +302,8 @@ public class RouterImpl implements Router {
      * @param msg The UDP datagram message to send.
      */
     public void send(OutgoingDatagramMessage msg) throws RouterException {
-        lock(readLock);
         try {
+            lock(readLock);
             if (enabled) {
                 for (DatagramIO datagramIO : datagramIOs.values()) {
                     datagramIO.send(msg);
@@ -311,6 +311,8 @@ public class RouterImpl implements Router {
             } else {
                 log.fine("Router disabled, not sending datagram: " + msg);
             }
+        }catch(Exception exception){
+            log.info("RouterImpl send error : "+exception.toString());
         } finally {
             unlock(readLock);
         }

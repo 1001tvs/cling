@@ -136,7 +136,8 @@ public class MulticastReceiverImpl implements MulticastReceiver<MulticastReceive
             } catch (UnsupportedDataException ex) {
                 log.info("Could not read datagram: " + ex.getMessage());
             } catch (Exception ex) {
-                throw new RuntimeException(ex);
+                log.info("MulticastReceiverImpl run error : "+ex.toString());
+                // throw new RuntimeException(ex);
             }
         }
         try {
