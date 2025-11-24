@@ -513,8 +513,13 @@ public class RouterImpl implements Router {
     }
 
     protected void unlock(Lock lock) {
-        log.finest("Releasing router lock: " + lock.getClass().getSimpleName());
-        lock.unlock();
+        try{
+            log.finest("Releasing router lock: " + lock.getClass().getSimpleName());
+            lock.unlock();
+        }catch(Exception e){
+            log.fine("RouterImpl unlock error : " + e.toString());
+        }
+        
     }
 
     /**
