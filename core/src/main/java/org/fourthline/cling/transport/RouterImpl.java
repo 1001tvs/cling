@@ -46,6 +46,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.Iterator;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
@@ -58,6 +59,24 @@ import java.util.logging.Logger;
  * Default implementation of network message router.
  * <p>
  * Initializes and starts listening for data on the network when enabled.
+ * </p>
+ * <p>
+ * <b>Locking rule:</b> the router lock (<code>readLock</code>/<code>writeLock</code>) guards the
+ * lifecycle of the transports and the membership of the transport maps only. It must never be
+ * held while blocking network I/O is performed. A single HTTP request can block for up to
+ * {@link org.fourthline.cling.transport.spi.StreamClientConfiguration#getTimeoutSeconds()}
+ * (60 seconds by default) when the remote device is unreachable; if that request were made while
+ * holding the read lock, then {@link #enable()} and {@link #disable()} - and on Android the
+ * application main thread inside
+ * {@link org.fourthline.cling.android.AndroidRouter#onNetworkTypeChange} - would queue up behind
+ * it. That is the "Input dispatching timed out" ANR reported on the Play Store (main thread
+ * parked in <code>RouterImpl.lock()</code> because of a connectivity change broadcast).
+ * </p>
+ * <p>
+ * Outgoing sends therefore copy what they need while holding the lock, release it, and only then
+ * talk to the network. {@link #enable()}/{@link #disable()} keep the exclusive write lock for the
+ * whole start/stop sequence, as that sequence is the only thing they guard; they must be invoked
+ * from a background thread (on Android: never from the main thread).
  * </p>
  *
  * @author Christian Bauer
@@ -298,53 +317,89 @@ public class RouterImpl implements Router {
 
     /**
      * Sends the UDP datagram on all bound {@link org.fourthline.cling.transport.spi.DatagramIO}s.
+     * <p>
+     * The transport set is copied while the router lock is held, the datagrams are written after
+     * it has been released (see the locking rule on this class).
+     * </p>
      *
      * @param msg The UDP datagram message to send.
      */
     public void send(OutgoingDatagramMessage msg) throws RouterException {
+
+        Map<InetAddress, DatagramIO> transports;
+
         try {
             lock(readLock);
-            if (enabled) {
-                for (DatagramIO datagramIO : datagramIOs.values()) {
-                    datagramIO.send(msg);
+            try {
+                if (!enabled) {
+                    log.fine("Router disabled, not sending datagram: " + msg);
+                    return;
                 }
-            } else {
-                log.fine("Router disabled, not sending datagram: " + msg);
+                transports = new LinkedHashMap<>(datagramIOs);
+            } finally {
+                unlock(readLock);
             }
-        }catch(Exception exception){
-            log.info("RouterImpl send error : "+exception.toString());
-        } finally {
-            unlock(readLock);
+        } catch (RouterException ex) {
+            // Router is busy being enabled/disabled, drop the datagram - SSDP is lossy by nature
+            // and this must never fail the (synchronous) protocol which sent it.
+            log.info("RouterImpl send error : " + ex);
+            return;
+        }
+
+        for (DatagramIO datagramIO : transports.values()) {
+            try {
+                datagramIO.send(msg);
+            } catch (Exception exception) {
+                // One broken transport must not prevent the message from going out on the others
+                log.info("RouterImpl send error : " + exception.toString());
+            }
         }
     }
 
     /**
      * Sends the TCP stream request with the {@link org.fourthline.cling.transport.spi.StreamClient}.
+     * <p>
+     * The client reference is taken while the router lock is held, the actual request is sent
+     * after it has been released. This is essential: a request to an unreachable device blocks
+     * for up to <code>getTimeoutSeconds()</code> (60 seconds by default), and holding the read
+     * lock for that long makes every {@link #disable()}/{@link #enable()} - and on Android the
+     * main thread - wait, which is an ANR.
+     * </p>
      *
      * @param msg The TCP (HTTP) stream message to send.
      * @return The return value of the {@link org.fourthline.cling.transport.spi.StreamClient#sendRequest(StreamRequestMessage)}
      *         method or <code>null</code> if no <code>StreamClient</code> is available.
      */
     public StreamResponseMessage send(StreamRequestMessage msg) throws RouterException {
+
+        StreamClient client;
+        boolean routerEnabled;
+
         lock(readLock);
         try {
-            if (enabled) {
-                if (streamClient == null) {
-                    log.fine("No StreamClient available, not sending: " + msg);
-                    return null;
-                }
-                log.fine("Sending via TCP unicast stream: " + msg);
-                try {
-                    return streamClient.sendRequest(msg);
-                } catch (InterruptedException ex) {
-                    throw new RouterException("Sending stream request was interrupted", ex);
-                }
-            } else {
-                log.fine("Router disabled, not sending stream request: " + msg);
-                return null;
-            }
+            routerEnabled = enabled;
+            client = streamClient;
         } finally {
             unlock(readLock);
+        }
+
+        if (!routerEnabled) {
+            log.fine("Router disabled, not sending stream request: " + msg);
+            return null;
+        }
+        if (client == null) {
+            log.fine("No StreamClient available, not sending: " + msg);
+            return null;
+        }
+
+        log.fine("Sending via TCP unicast stream: " + msg);
+        try {
+            return client.sendRequest(msg);
+        } catch (InterruptedException ex) {
+            throw new RouterException("Sending stream request was interrupted", ex);
+        } catch (RuntimeException ex) {
+            // The client can be stopped concurrently by disable(), e.g. a rejected execution
+            throw new RouterException("Sending stream request failed: " + ex, ex);
         }
     }
 
@@ -358,22 +413,38 @@ public class RouterImpl implements Router {
      * @param bytes The byte payload of the UDP datagram.
      */
     public void broadcast(byte[] bytes) throws RouterException {
+
+        Map<InetAddress, DatagramIO> transports;
+        NetworkAddressFactory addresses;
+
         lock(readLock);
         try {
-            if (enabled) {
-                for (Map.Entry<InetAddress, DatagramIO> entry : datagramIOs.entrySet()) {
-                    InetAddress broadcast = networkAddressFactory.getBroadcastAddress(entry.getKey());
-                    if (broadcast != null) {
-                        log.fine("Sending UDP datagram to broadcast address: " + broadcast.getHostAddress());
-                        DatagramPacket packet = new DatagramPacket(bytes, bytes.length, broadcast, 9);
-                        entry.getValue().send(packet);
-                    }
-                }
-            } else {
+            if (!enabled) {
                 log.fine("Router disabled, not broadcasting bytes: " + bytes.length);
+                return;
             }
+            transports = new LinkedHashMap<>(datagramIOs);
+            addresses = networkAddressFactory;
         } finally {
             unlock(readLock);
+        }
+
+        if (addresses == null) {
+            // Disabled in the meantime
+            return;
+        }
+
+        for (Map.Entry<InetAddress, DatagramIO> entry : transports.entrySet()) {
+            InetAddress broadcast = addresses.getBroadcastAddress(entry.getKey());
+            if (broadcast != null) {
+                log.fine("Sending UDP datagram to broadcast address: " + broadcast.getHostAddress());
+                DatagramPacket packet = new DatagramPacket(bytes, bytes.length, broadcast, 9);
+                try {
+                    entry.getValue().send(packet);
+                } catch (Exception exception) {
+                    log.info("RouterImpl broadcast error : " + exception.toString());
+                }
+            }
         }
     }
 

@@ -22,6 +22,9 @@ import android.content.IntentFilter;
 import android.net.ConnectivityManager;
 import android.net.NetworkInfo;
 import android.net.wifi.WifiManager;
+import android.os.Handler;
+import android.os.HandlerThread;
+import android.os.Looper;
 import org.fourthline.cling.UpnpServiceConfiguration;
 import org.fourthline.cling.model.ModelUtil;
 import org.fourthline.cling.protocol.ProtocolFactory;
@@ -31,11 +34,28 @@ import org.fourthline.cling.transport.RouterImpl;
 import org.fourthline.cling.transport.spi.InitializationException;
 import org.seamless.util.Exceptions;
 
+import java.util.concurrent.locks.Lock;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
 /**
  * Monitors all network connectivity changes, switching the router accordingly.
+ * <p>
+ * <b>Threading:</b> {@link #enable()} and {@link #disable()} bind and unbind sockets and start and
+ * stop the HTTP server, so they take up to several seconds. This class never runs them on the
+ * Android main thread:
+ * </p>
+ * <ul>
+ *   <li>the connectivity broadcast receiver is registered with a dedicated
+ *       "cling-android-router" thread, so
+ *       {@link ConnectivityBroadcastReceiver#onReceive} is dispatched there instead of on the UI
+ *       thread;</li>
+ *   <li>the retries after a WIFI =&gt; NONE transition are scheduled with a delay instead of
+ *       sleeping, so that thread is never blocked for seconds;</li>
+ *   <li>as a last resort {@link #lock(java.util.concurrent.locks.Lock)} refuses to wait longer
+ *       than {@link #MAIN_THREAD_LOCK_TIMEOUT_MILLIS} when it is called on the main thread - a UI
+ *       thread waiting for the router lock is an ANR by definition.</li>
+ * </ul>
  *
  * @author Michael Pujos
  * @author Christian Bauer
@@ -44,6 +64,22 @@ public class AndroidRouter extends RouterImpl {
 
     final private static Logger log = Logger.getLogger(Router.class.getName());
 
+    /** Thread on which connectivity changes are handled (never the Android main thread). */
+    final public static String ROUTER_THREAD_NAME = "cling-android-router";
+
+    /** How often we retry to find a new network during a WIFI =&gt; NONE =&gt; MOBILE transition. */
+    final public static int NETWORK_RETRY_COUNT = 3;
+
+    /** Delay between those retries. */
+    final public static int NETWORK_RETRY_DELAY_MILLIS = 1000;
+
+    /**
+     * Upper bound for waiting on the router lock when the caller is the Android main thread.
+     * Five seconds is the input dispatch ANR deadline, so we must return long before that and
+     * let the caller log the "router busy" condition instead of freezing the UI.
+     */
+    final public static int MAIN_THREAD_LOCK_TIMEOUT_MILLIS = 100;
+
     final private Context context;
 
     final private WifiManager wifiManager;
@@ -51,6 +87,9 @@ public class AndroidRouter extends RouterImpl {
     protected WifiManager.WifiLock wifiLock;
     protected NetworkInfo networkInfo;
     protected BroadcastReceiver broadcastReceiver;
+
+    protected HandlerThread routerThread;
+    protected Handler routerHandler;
 
     public AndroidRouter(UpnpServiceConfiguration configuration,
                          ProtocolFactory protocolFactory,
@@ -63,8 +102,19 @@ public class AndroidRouter extends RouterImpl {
 
         // Only register for network connectivity changes if we are not running on emulator
         if (!ModelUtil.ANDROID_EMULATOR) {
+            // enable()/disable() are expensive (sockets, Jetty server) and must never run on the
+            // main thread, so the receiver is dispatched on our own thread.
+            this.routerThread = new HandlerThread(ROUTER_THREAD_NAME);
+            this.routerThread.start();
+            this.routerHandler = new Handler(this.routerThread.getLooper());
+
             this.broadcastReceiver = createConnectivityBroadcastReceiver();
-            context.registerReceiver(broadcastReceiver, new IntentFilter("android.net.conn.CONNECTIVITY_CHANGE"));
+            context.registerReceiver(
+                broadcastReceiver,
+                new IntentFilter("android.net.conn.CONNECTIVITY_CHANGE"),
+                null,
+                routerHandler
+            );
         }
     }
 
@@ -74,13 +124,37 @@ public class AndroidRouter extends RouterImpl {
 
     @Override
     protected int getLockTimeoutMillis() {
+        // Only used when the caller is not the main thread, see lock(Lock).
         return 15000;
+    }
+
+    /**
+     * Bounds the time the Android main thread can spend waiting for the router lock.
+     * <p>
+     * Every other thread keeps the regular timeout: waiting on the router is only dangerous when
+     * the waiting thread is the one that has to dispatch input events.
+     * </p>
+     */
+    @Override
+    protected void lock(Lock lock) throws RouterException {
+        if (isMainThread()) {
+            lock(lock, MAIN_THREAD_LOCK_TIMEOUT_MILLIS);
+        } else {
+            super.lock(lock);
+        }
+    }
+
+    protected boolean isMainThread() {
+        Looper mainLooper = Looper.getMainLooper();
+        return mainLooper != null && Looper.myLooper() == mainLooper;
     }
 
     @Override
     public void shutdown() throws RouterException {
-        super.shutdown();
+        // Stop reacting to connectivity changes first: the router thread must not re-enable the
+        // transports while they are being torn down.
         unregisterBroadcastReceiver();
+        super.shutdown();
     }
 
     @Override
@@ -151,11 +225,40 @@ public class AndroidRouter extends RouterImpl {
         }
     }
 
+    /**
+     * Stops listening for connectivity changes and terminates the router thread.
+     * <p>
+     * Safe to call more than once: the receiver is unregistered only once and pending network
+     * change retries are dropped.
+     * </p>
+     */
     public void unregisterBroadcastReceiver() {
         if (broadcastReceiver != null) {
-            context.unregisterReceiver(broadcastReceiver);
+            try {
+                context.unregisterReceiver(broadcastReceiver);
+            } catch (IllegalArgumentException ex) {
+                // Not (or no longer) registered - Android throws if the receiver is unknown
+                log.log(Level.FINE, "Broadcast receiver was not registered: " + ex, ex);
+            }
             broadcastReceiver = null;
         }
+        shutdownRouterThread();
+    }
+
+    /**
+     * Quits the thread which handles connectivity changes, dropping pending retries.
+     */
+    protected void shutdownRouterThread() {
+        if (routerThread == null)
+            return;
+
+        if (routerHandler != null) {
+            routerHandler.removeCallbacksAndMessages(null);
+        }
+        routerThread.quit();
+
+        routerHandler = null;
+        routerThread = null;
     }
 
     protected void setWiFiMulticastLock(boolean enable) {
@@ -249,44 +352,73 @@ public class AndroidRouter extends RouterImpl {
         @Override
         public void onReceive(Context context, Intent intent) {
 
-            if (!intent.getAction().equals(ConnectivityManager.CONNECTIVITY_ACTION))
+            if (intent == null || !ConnectivityManager.CONNECTIVITY_ACTION.equals(intent.getAction()))
                 return;
 
             displayIntentInfo(intent);
 
-            NetworkInfo newNetworkInfo = NetworkUtils.getConnectedNetworkInfo(context);
-
-            // When Android switches WiFI => MOBILE, sometimes we may have a short transition
-            // with no network: WIFI => NONE, NONE => MOBILE
-            // The code below attempts to make it look like a single WIFI => MOBILE
-            // transition, retrying up to 3 times getting the current network.
-            //
-            // Note: this can block the UI thread for up to 3s
-            if (networkInfo != null && newNetworkInfo == null) {
-                for (int i = 1; i <= 3; i++) {
-                    try {
-                        Thread.sleep(1000);
-                    } catch (InterruptedException e) {
-                        return;
+            // This receiver is dispatched on the router thread (see the constructor), so we are
+            // already off the main thread. Defensive: if a subclass registered this receiver
+            // differently, never run the blocking enable()/disable() on the main thread.
+            final Handler handler = routerHandler;
+            if (handler != null && isMainThread()) {
+                handler.post(new Runnable() {
+                    @Override
+                    public void run() {
+                        handleNetworkChange(NETWORK_RETRY_COUNT);
                     }
-                    log.warning(String.format(
-                        "%s => NONE network transition, waiting for new network... retry #%d",
-                        networkInfo.getTypeName(), i
-                    ));
-                    newNetworkInfo = NetworkUtils.getConnectedNetworkInfo(context);
-                    if (newNetworkInfo != null)
-                        break;
-                }
+                });
+            } else {
+                handleNetworkChange(NETWORK_RETRY_COUNT);
+            }
+        }
+
+        /**
+         * Applies a connectivity change, retrying a few times while the device moves between
+         * networks (WIFI =&gt; NONE =&gt; MOBILE is reported as two separate changes).
+         * <p>
+         * The retries are scheduled with a delay instead of {@link Thread#sleep}. Sleeping here
+         * used to block the Android main thread for up to three seconds, which is an ANR on its
+         * own - see the "this can block the UI thread for up to 3s" note of the previous
+         * implementation.
+         * </p>
+         *
+         * @param retriesLeft How many more times we may wait for a new network to appear.
+         */
+        protected void handleNetworkChange(final int retriesLeft) {
+
+            if (routerThread == null) {
+                // Router is shut down, a late connectivity event must not re-enable it
+                log.fine("Router thread is gone, ignoring connectivity change");
+                return;
+            }
+
+            NetworkInfo newNetworkInfo = NetworkUtils.getConnectedNetworkInfo(context);
+            final Handler handler = routerHandler;
+
+            if (networkInfo != null && newNetworkInfo == null && retriesLeft > 0 && handler != null) {
+                log.warning(String.format(
+                    "%s => NONE network transition, waiting for new network... retry #%d",
+                    networkInfo.getTypeName(), NETWORK_RETRY_COUNT - retriesLeft + 1
+                ));
+                handler.postDelayed(new Runnable() {
+                    @Override
+                    public void run() {
+                        handleNetworkChange(retriesLeft - 1);
+                    }
+                }, NETWORK_RETRY_DELAY_MILLIS);
+                return;
             }
 
             if (isSameNetworkType(networkInfo, newNetworkInfo)) {
                 log.info("No actual network change... ignoring event!");
-            } else {
-                try {
-                    onNetworkTypeChange(networkInfo, newNetworkInfo);
-                } catch (RouterException ex) {
-                    handleRouterExceptionOnNetworkTypeChange(ex);
-                }
+                return;
+            }
+
+            try {
+                onNetworkTypeChange(networkInfo, newNetworkInfo);
+            } catch (RouterException ex) {
+                handleRouterExceptionOnNetworkTypeChange(ex);
             }
         }
 
